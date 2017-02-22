@@ -1,4 +1,6 @@
 
+use mydb
+
 //Filtrage par indicator_id = 662 <=> Particules fines
 //On définit la valeur en entier plutot que String pour ensuite effectuer un tri
 
