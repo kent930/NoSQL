@@ -1,0 +1,123 @@
+
+//Filtrage par indicator_id = 662 <=> Particules fines
+//On définit la valeur en entier plutot que String pour ensuite effectuer un tri
+
+db.air.find({indicator_id:'662'}).forEach( function (a){
+	db.air.update({_id:a._id}, {$set:{"data_valuemessage": parseFloat(a.data_valuemessage)}})
+})
+
+//tri par ordre croissant sur la quantité de particules fines
+
+db.air.find({indicator_id:'662'}, {_id:0, geo_entity_name:1, data_valuemessage:1}).sort({data_valuemessage:1}).pretty()
+
+//Constante de conversion degrés => radians, utile pour les latitudes et longitudes dans les calculs de distance
+var c = Math.PI/180
+
+//Latitude et longitude de Staten Island et du Queens (en radians)
+var lat_SI = 40.579021*c
+var long_SI = -74.151535*c
+var lat_Q = 40.742054*c
+var long_Q = -73.769417*c
+
+
+
+//On calcul pour chaque parc sa distance à Staten Island et au Queens, puis on insert ces distance dans deux nouveaux champs (dSI et dQ) par document 
+db.park.find().forEach( function(p) { 
+	
+	var dist_SI = 6378.137*Math.acos(Math.sin(p.latitude*c)*Math.sin(lat_SI) + Math.cos(p.latitude*c)*Math.cos(lat_SI)*Math.cos(p.longitude*c-long_SI)); 
+	var dist_Q = 6378.137*Math.acos(Math.sin(p.latitude*c)*Math.sin(lat_Q) + Math.cos(p.latitude*c)*Math.cos(lat_Q)*Math.cos(p.longitude*c-long_Q)); 
+	
+	db.park.update({_id:p._id}, {$set:{"dSI":dist_SI, "dQ":dist_Q, "area": parseFloat(p.area) }});
+
+})
+
+// total prendra les parcs de type 4985 de Staten Island et du Queens
+// statenIsland les parcs de type 4985 de Staten Island
+// queens les parcs de type 4985 du Queens
+
+var total = {$and: [{feat_code:'4985'},{$or: [{dSI: {$lt : 12}}, {dQ: {$lt : 12}}]} ]}
+var statenIsland = {$and: [{feat_code:'4985'},{dSI: {$lt : 12}}]}
+var queens = {$and: [{feat_code:'4985'},{dQ: {$lt : 12}}]}
+
+//Décompte des parcs par quartier et total
+db.park.find(total).count()
+db.park.find(queens).count()
+db.park.find(statenIsland).count()
+
+
+//Surface totale de parcs par quartier et total
+db.park.aggregate( 
+	{ $match: total },
+	{ $group: { _id: 1, total: {$sum: "$area"}}} 
+)
+
+db.park.aggregate( 
+	{ $match: statenIsland },
+	{ $group: { _id: 1, total: {$sum: "$area"}}} 
+)
+
+db.park.aggregate( 
+	{ $match: queens },
+	{ $group: { _id: 1, total: {$sum: "$area"}}} 
+)
+
+
+//Calcul de la distance entre chaque station de métro et le Queens et rajout de la distance dans les documents (dQ)
+db.sub.find().forEach( function(p) { 
+	
+	var dist_Q = 6378.137*Math.acos(Math.sin(p.latitude*c)*Math.sin(lat_Q) + Math.cos(p.latitude*c)*Math.cos(lat_Q)*Math.cos(p.longitude*c-long_Q)); 
+	
+	db.sub.update({_id:p._id}, {$set:{"dQ":dist_Q}});
+})
+
+//Nombre de stations de métro dans le Queens
+db.sub.find( {dQ: {$lt:12}} ).count()
+
+//Calcul de la distance entre chaque piscine et le Queens et rajout de la distance dans les documents (dQ)
+db.pool.find().forEach( function(p) { 
+	
+	var dist_Q = 6378.137*Math.acos(Math.sin(p.latitude*c)*Math.sin(lat_Q) + Math.cos(p.latitude*c)*Math.cos(lat_Q)*Math.cos(p.longitude*c-long_Q)); 
+	
+	db.pool.update({_id:p._id}, {$set:{"dQ":dist_Q}});
+
+})
+
+//Nombre de piscines dans le Queens
+db.pool.find( {dQ: {$lt:12}} ).count()
+
+//En réalité il n'y en à que 2 car la Flushing Meadows Corona Park Pool & Rink est présente en double dans les données
+db.pool.find( {dQ: {$lt:12}} ).pretty()
+
+//On va donc supprimer une occurence
+db.pool.remove({poolName:"Flushing Meadows Corona Park Pool & Rink"},1)
+
+
+//Fonction qui nous permet de trouver la station de métro du Queens la plus proche du point de coordonnées (lat, long)
+
+//id est l'id de la station, name son nom et res la distance à cette station; ces trois variables sont mises à jour dans la fonction closestStation et sont accessible depuis l'exterieur (variables globales).
+function closestStation(lat, long){
+	res = 100
+	db.sub.find({dQ: {$lt:12}}).forEach( function(sub) { 
+	
+		dist = 6378.137*Math.acos(Math.sin(sub.latitude*c)*Math.sin(lat*c) + Math.cos(sub.latitude*c)*Math.cos(lat*c)*Math.cos(sub.longitude*c-long*c));
+	
+		if(dist<res){
+			res = dist;
+			id = sub._id;
+			name = sub.name;
+		}
+	})	
+}
+
+
+//Maintenant, pour chaque piscine du Queens on cherche la station la plus proche
+db.pool.find({dQ: {$lt:12}}).forEach( function(pool) { 
+	closestStation(pool.latitude, pool.longitude);
+	db.pool.update({_id:pool._id}, {$set:{"closestSubStation_id":id, "closestSubStation_name":name, "distance":res}});
+	
+})
+
+db.pool.find( {dQ: {$lt:12}} ).pretty()
+
+
+
